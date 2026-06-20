@@ -159,7 +159,9 @@ def run_simulation(
         curves[:, d] = cap + account_pnl
 
     ruined = cap <= 0
-    return curves, ruined, blown
+    # PnL brut : cumul de daily_usd sans logique prop firm (pour P5 visible)
+    pnl_raw = capital + np.cumsum(daily_usd, axis=1)
+    return curves, ruined, blown, pnl_raw
 
 
 # ============================================================
@@ -336,9 +338,9 @@ class SimulateurApp(tk.Tk):
         # ── Section Compte prop firm ─────────────────────────────────────────
         _section_label(left, "▸  COMPTE PROP FIRM", r, ACCENT2); r += 1
 
-        self.p_capital    = ParamRow(left, "Capital personnel ($)", 5_000,   100, 100_000, 100,  ".0f", row=r, callback=cb); r += 1
+        self.p_capital    = ParamRow(left, "Capital personnel ($)", 5_00,   100, 100_000, 100,  ".0f", row=r, callback=cb); r += 1
         self.p_taille_cpt = ParamRow(left, "Taille du compte ($)", 50_000, 1_000, 500_000, 1_000, ".0f", row=r, callback=cb); r += 1
-        self.p_dd         = ParamRow(left, "Drawdown max ($)",         600,   100,  50_000,  100, ".0f", row=r, callback=cb); r += 1
+        self.p_dd         = ParamRow(left, "Drawdown max ($)",         2000,   100,  50_000,  100, ".0f", row=r, callback=cb); r += 1
         self.p_chall_cost = ParamRow(left, "Coût challenge + PA ($)",  180,     0,  10_000,   10, ".0f", row=r, callback=cb); r += 1
 
         _separator(left, r); r += 1
@@ -346,16 +348,16 @@ class SimulateurApp(tk.Tk):
         # ── Section Paramètres de trading ────────────────────────────────────
         _section_label(left, "▸  TRADING (en points)", r, ACCENT3); r += 1
 
-        self.p_prix_pt  = ParamRow(left, "Prix d'un point ($)",    5.0,   0.25, 50.0,  0.25, ".2f", row=r, callback=cb); r += 1
-        self.p_nb_ctr   = ParamRow(left, "Nb micro-contrats",        1,      1,   20,    1,  ".0f", row=r, callback=cb); r += 1
+        self.p_prix_pt  = ParamRow(left, "Prix d'un point ($)",    50.0,   0.25, 50.0,  0.25, ".2f", row=r, callback=cb); r += 1
+        self.p_nb_ctr   = ParamRow(left, "Nb de contrats",            1,      1,   20,    1,  ".0f", row=r, callback=cb); r += 1
 
         _separator(left, r); r += 1
 
         # ── Section Distribution journalière ─────────────────────────────────
         _section_label(left, "▸  DISTRIBUTION JOURNALIÈRE (pts)", r, ACCENT); r += 1
 
-        self.p_mean  = ParamRow(left, "Moyenne / jour (pts)",    2.0,  -50.0,  50.0,  0.5,  ".1f", row=r, callback=cb); r += 1
-        self.p_std   = ParamRow(left, "Écart-type (pts)",       20.0,    0.1, 200.0,  0.5,  ".1f", row=r, callback=cb); r += 1
+        self.p_mean  = ParamRow(left, "Moyenne / jour (pts)",    1.0,  -50.0,  50.0,  0.5,  ".1f", row=r, callback=cb); r += 1
+        self.p_std   = ParamRow(left, "Écart-type (pts)",       5.0,    0.1, 200.0,  0.5,  ".1f", row=r, callback=cb); r += 1
         self.p_skew  = ParamRow(left, "Asymétrie",              -0.2,   -5.0,   5.0,  0.05, ".3f", row=r, callback=cb); r += 1
         self.p_kurt  = ParamRow(left, "Kurtosis excès",          3.0,    0.0,  20.0,  0.5,  ".2f", row=r, callback=cb); r += 1
 
@@ -417,13 +419,13 @@ class SimulateurApp(tk.Tk):
         self.update_idletasks()
 
         try:
-            curves, ruined, blown = run_simulation(
+            curves, ruined, blown, pnl_raw = run_simulation(
                 mean_pts, std_pts, skew, kurt,
                 capital, n_days, n_sim,
                 prix_pt, nb_ctr,
                 dd, chall_cost,
             )
-            self._draw(curves, ruined, blown,
+            self._draw(curves, ruined, blown, pnl_raw,
                        capital, taille_cpt, dd, chall_cost,
                        prix_pt, nb_ctr, mean_pts, std_pts, skew, kurt)
 
@@ -441,7 +443,7 @@ class SimulateurApp(tk.Tk):
 
     # ── Tracé ────────────────────────────────────────────────────────────────
 
-    def _draw(self, curves, ruined, blown,
+    def _draw(self, curves, ruined, blown, pnl_raw,
               capital, taille_cpt, dd, chall_cost,
               prix_pt, nb_ctr, mean_pts, std_pts, skew, kurt):
 
@@ -456,15 +458,17 @@ class SimulateurApp(tk.Tk):
         n_sim, n_days = curves.shape
         days = np.arange(1, n_days + 1)
 
-        p05 = np.percentile(curves, 5,  axis=0)
-        p50 = np.percentile(curves, 50, axis=0)
-        p95 = np.percentile(curves, 95, axis=0)
+        # Toutes les courbes sur pnl_raw — cohérent avec les stats
+        p05 = np.percentile(pnl_raw,  5, axis=0)
+        p50 = np.percentile(pnl_raw, 50, axis=0)
+        p95 = np.percentile(pnl_raw, 95, axis=0)
 
-        final      = curves[:, -1]
+        # Stats finales : PnL brut (cohérent avec le chart) + ruine sur capital réel
+        final_raw  = pnl_raw[:, -1]
         prob_ruin  = ruined.mean() * 100
-        cap_med    = np.median(final)
-        cap_p05    = np.percentile(final, 5)
-        cap_p95    = np.percentile(final, 95)
+        cap_med    = np.median(final_raw)
+        cap_p05    = np.percentile(final_raw, 5)
+        cap_p95    = np.percentile(final_raw, 95)
         blown_med  = float(np.median(blown))
         blown_p95  = float(np.percentile(blown, 95))
 
@@ -479,16 +483,22 @@ class SimulateurApp(tk.Tk):
 
         # Zone P5/P95
         ax.fill_between(days, p05 / scale, p95 / scale,
-                        alpha=0.18, color=ACCENT, label="Zone P5 – P95")
+                        alpha=0.10, color=ACCENT, label="Zone P5 – P95")
 
         # Médiane
         ax.plot(days, p50 / scale, color=ACCENT, linewidth=2.2, label="Médiane")
 
-        # Lignes P5 / P95
-        ax.plot(days, p05 / scale, color=RED,   linewidth=1.0,
-                linestyle="--", alpha=0.75, label="P5")
+        # P95
         ax.plot(days, p95 / scale, color=GREEN, linewidth=1.0,
                 linestyle="--", alpha=0.75, label="P95")
+
+        # P5 — peut passer sous la ligne de ruine
+        ax.plot(days, p05 / scale, color=RED, linewidth=1.0,
+                linestyle="--", alpha=0.85, label="P5")
+
+        # Ligne de ruine à 0
+        ax.axhline(0, color=RED, linewidth=1.2, linestyle="-", alpha=0.6,
+                   label="Ruine (capital = 0 $)")
 
         # Capital initial
         ax.axhline(capital / scale, color="white",
@@ -509,11 +519,11 @@ class SimulateurApp(tk.Tk):
         fmt_cap = lambda v: f"{v / scale:,.1f} {unit}"
         stats = (
             f"Prob. de ruine         : {prob_ruin:.1f} %\n"
-            f"Capital médian final   : {fmt_cap(cap_med)}\n"
-            f"Capital P95 final      : {fmt_cap(cap_p95)}\n"
-            f"Capital P5 final       : {fmt_cap(cap_p05)}\n"
+            f"PnL médian final       : {fmt_cap(cap_med)}\n"
+            f"PnL P95 final          : {fmt_cap(cap_p95)}\n"
+            f"PnL P5 final           : {fmt_cap(cap_p05)}\n"
             f"Comptes grillés (méd.) : {blown_med:.0f}\n"
-            f"Comptes grillés (P95)  : {blown_p95:.0f}"
+            f"Comptes grillés (P5)   : {blown_p95:.0f}"
         )
         ax.text(0.98, 0.04, stats,
                 transform=ax.transAxes, ha="right", va="bottom",
@@ -528,8 +538,8 @@ class SimulateurApp(tk.Tk):
             f"Compte : {taille_cpt:,.0f} $  |  DD : {dd:,.0f} $\n"
             f"Coût challenge+PA : {chall_cost:,.0f} $\n"
             f"Prix point : {prix_pt:.2f} $  |  Contrats : {nb_ctr}\n"
-            f"PnL moy/jour : {pnl_moy_j:+.1f} $  "
-            f"σ : {pnl_std_j:.1f} $\n"
+            f"Moy/jour : {pnl_moy_j:+.1f} $\n"
+            f"σ        : {pnl_std_j:.1f} $\n"
             f"Asymétrie : {skew:.3f}  |  Kurtosis exc. : {kurt:.2f}"
         )
         ax.text(0.98, 0.97, params,
