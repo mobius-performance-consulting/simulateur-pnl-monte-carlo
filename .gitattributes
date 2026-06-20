@@ -1,0 +1,3 @@
+# Treat .exe as binary
+dist/SimulateurPnL.exe binary
+*.exe binary
